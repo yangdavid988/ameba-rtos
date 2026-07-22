@@ -1,0 +1,64 @@
+name: Sync Fork Upstream
+on:
+  schedule:
+    # 每天 UTC 01:00 (北京时间 9:00) 自动同步
+    - cron: '0 9 * * *'
+      timezone: 'Asia/Shanghai'
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          repository: yangdavid988/ameba-rtos
+          ref: release/v1.2
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync release/v1.2 from upstream
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          UPSTREAM="https://github.com/Ameba-AIoT/ameba-rtos.git"
+          BRANCH="release/v1.2"
+          WORKFLOW_FILE=".github/workflows/sync_fork_upstream.yml"
+
+          # Backup workflow file content before reset
+          BACKUP="$(cat "$WORKFLOW_FILE")"
+
+          # Add upstream remote if not exists
+          if ! git remote get-url upstream &>/dev/null; then
+            git remote add upstream "$UPSTREAM"
+          fi
+
+          # Fetch latest from upstream
+          git fetch upstream "$BRANCH"
+
+          # Check if there are new commits
+          LOCAL=$(git rev-parse "$BRANCH")
+          REMOTE=$(git rev-parse "upstream/$BRANCH")
+
+          if [ "$LOCAL" = "$REMOTE" ]; then
+            echo "Fork is already up to date with upstream."
+            exit 0
+          fi
+
+          echo "New commits found. Syncing..."
+
+          # Reset to match upstream exactly
+          git reset --hard "upstream/$BRANCH"
+
+          # Restore workflow file from backup
+          mkdir -p .github/workflows
+          printf '%s\n' "$BACKUP" > "$WORKFLOW_FILE"
+          git add "$WORKFLOW_FILE"
+          git commit -m "chore: restore sync workflow"
+
+          # Push to fork
+          git push origin "HEAD:$BRANCH" --force
+
+          echo "Fork synced successfully."
