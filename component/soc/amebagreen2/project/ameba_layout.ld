@@ -7,7 +7,17 @@
 #define SRAM_BASE                    (0x20000000)
 #define SRAM_END                     (0x20080000)
 #define PSRAM_BASE                   (0x60000000)
-#define PSRAM_END                    (0x60400000)
+/* LOCAL MODIFICATION (photo_album_demo, 2026-08-31): 4M → 16M.
+ * This EVB's MCM PSRAM is 16MB (MCM_PSRAM_SIZE_16Mb); runtime detection in
+ * ameba_psram.c warns "PSRAM_END mismatch" if a smaller part is fitted.
+ * PSRAM_END feeds: PSRAM_KM4NS_IMG2_SIZE (leftover after IMG3/IMG2 auto-grows
+ * into KM4NS_BD_PSRAM — verified empty: __psram_image2_start__==__end__ in the
+ * km4ns map) and __non_secure_psram_end__ (bottom of file), which is the
+ * dynamic heap end for CONFIG_PSRAM_ALL_FOR_AP_HEAP (os_init → os_heap_add).
+ * The PROVIDE(__non_secure_psram_end__ = 0x60400000) in
+ * project_km4tz/ld/ameba_rom_symbol_bcut_wifi.ld is superseded — PROVIDE never
+ * overrides an absolute assignment from this file. */
+#define PSRAM_END                    (0x61000000)
 
 /* layout configuration */
 #define TZ_NSC_SIZE                  (4)
@@ -113,9 +123,19 @@ IMG3 size is 0.    │  │   KM4TZ_IMG3(44K)    │    │
 #define KM4TZ_PSRAM_TZ_ENTRY_START    (KM4TZ_PSRAM_TZ_NSC_START + PSRAM_TZ_NSC_SIZE )       /* 0x60001000 ~ 0x60005000 | unavailable */
 #define KM4TZ_PSRAM_TZ_SECURE_START   (KM4TZ_PSRAM_TZ_ENTRY_START + PSRAM_TZ_ENTRY_SIZE)    /* 0x60005000 ~ 0x60025000 | unavailable */
 
-#define PSRAM_KM4TZ_IMG2_SIZE         (KBYTES(3220) - (PSRAM_TZ_NSC_SIZE + PSRAM_TZ_ENTRY_SIZE + PSRAM_KM4TZ_IMG3_SIZE))
-#define KM4TZ_IMG2_PSRAM_START        (KM4TZ_PSRAM_TZ_SECURE_START + PSRAM_KM4TZ_IMG3_SIZE)    /* 0x60025000 ~ 0x60325000 | 0x60000000 ~ 0x60325000*/
-#define KM4NS_IMG2_PSRAM_START        (KM4TZ_IMG2_PSRAM_START + PSRAM_KM4TZ_IMG2_SIZE)         /* 0x60325000 ~ 0x60400000 | 0x60325000 ~ 0x60400000*/
+/* LOCAL MODIFICATION (photo_album_demo, 2026-08-31): 3220 → 5120 KB.
+ * The KM4TZ .psram_heap.start pool = 2×1.5MB LCDC FBs + 1.5MB letterbox
+ * scratch = 4.5MB > 3220K (FBs alone left only ~218KB).  Shrinks the KM4NS
+ * leftover (13.2MB → 11MB) — WiFi fullmac needs ≪ that (was 876K at the
+ * original 4MB PSRAM_END). */
+/* LOCAL MODIFICATION (photo_album_demo, 2026-09-01): 5120 → 7168 KB.
+ * SD photo source needs a 2MB PSRAM buffer for large JPEG streams, so the
+ * KM4TZ .psram_heap.start pool grows to 2×1.5MB FBs + 1.5MB letterbox +
+ * 2MB s_jpeg_buf = 6.5MB.  KM4NS leftover shrinks to ~9.4MB — the WiFi
+ * fullmac uses only ~876KB of the NS region. */
+#define PSRAM_KM4TZ_IMG2_SIZE         (KBYTES(7168) - (PSRAM_TZ_NSC_SIZE + PSRAM_TZ_ENTRY_SIZE + PSRAM_KM4TZ_IMG3_SIZE))
+#define KM4TZ_IMG2_PSRAM_START        (KM4TZ_PSRAM_TZ_SECURE_START + PSRAM_KM4TZ_IMG3_SIZE)    /* 0x60025000 ~ 0x606E5000 | 0x60000000 ~ 0x606E5000*/
+#define KM4NS_IMG2_PSRAM_START        (KM4TZ_IMG2_PSRAM_START + PSRAM_KM4TZ_IMG2_SIZE)         /* 0x606E5000 ~ 0x61000000 | 0x606E5000 ~ 0x61000000*/
 #define PSRAM_KM4NS_IMG2_SIZE         (PSRAM_END - KM4NS_IMG2_PSRAM_START)
 
 MEMORY
@@ -180,8 +200,8 @@ MEMORY
     KM4TZ_BD_PSRAM_TZ_ENTRY (rwx) :        ORIGIN = KM4TZ_PSRAM_TZ_ENTRY_START, LENGTH = PSRAM_TZ_ENTRY_SIZE                                                                     /* KM4TZ BD PSRAM ENTRY: 16k */
     KM4TZ_BD_PSRAM_TZ_S (rwx) :            ORIGIN = KM4TZ_PSRAM_TZ_SECURE_START + SECURE_ADDR_OFFSET  + IMAGE_HEADER_LEN, LENGTH = PSRAM_KM4TZ_IMG3_SIZE - IMAGE_HEADER_LEN      /* KM4TZ BD PSRAM S:  128k */
     /* KM4TZ Non-secure PSRAM */
-    KM4TZ_BD_PSRAM (rwx) :                 ORIGIN = KM4TZ_IMG2_PSRAM_START + IMAGE_HEADER_LEN, LENGTH = PSRAM_KM4TZ_IMG2_SIZE - IMAGE_HEADER_LEN                                 /* KM4TZ BD PSRAM : Tz off,3220K; TZ on, 3072K */
-    KM4NS_BD_PSRAM (rwx) :                 ORIGIN = KM4NS_IMG2_PSRAM_START + IMAGE_HEADER_LEN, LENGTH = PSRAM_KM4NS_IMG2_SIZE - IMAGE_HEADER_LEN                                 /* KM4NS BD PSRAM: 876K */
+    KM4TZ_BD_PSRAM (rwx) :                 ORIGIN = KM4TZ_IMG2_PSRAM_START + IMAGE_HEADER_LEN, LENGTH = PSRAM_KM4TZ_IMG2_SIZE - IMAGE_HEADER_LEN                                 /* KM4TZ BD PSRAM : Tz off,5120K */
+    KM4NS_BD_PSRAM (rwx) :                 ORIGIN = KM4NS_IMG2_PSRAM_START + IMAGE_HEADER_LEN, LENGTH = PSRAM_KM4NS_IMG2_SIZE - IMAGE_HEADER_LEN                                 /* KM4NS BD PSRAM: 11M, empty (verify __psram_image2_start__==__end__) */
 
     KM4TZ_PSRAM_HEAP_EXT (rwx) :           ORIGIN = 0x6FFFFFFF, LENGTH = 0x6FFFFFFF - 0x6FFFFFFF    /* KM4TZ PSRAM HEAP EXT */
     KM4NS_PSRAM_HEAP_EXT (rwx) :           ORIGIN = 0x6FFFFFFF, LENGTH = 0x6FFFFFFF - 0x6FFFFFFF    /* KM4NS PSRAM HEAP EXT */
