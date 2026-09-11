@@ -9,7 +9,12 @@
 SDIOHCFG_TypeDef sdioh_config = {
 	.sdioh_bus_speed = SD_SPEED_HS, //SD_SPEED_DS or SD_SPEED_HS
 	.sdioh_bus_width = SDIOH_BUS_WIDTH_4BIT, //SDIOH_BUS_WIDTH_1BIT or SDIOH_BUS_WIDTH_4BIT
-	.sdioh_cd_pin = _PB_19,		// _PNC or other gpio pins, e.g. _PB_19
+	/* photo_album_demo LOCAL (2026-09-02): CD moved PB19 → PA26.  PB19 is
+	 * wired to LCD_D21 on this panel (t1720a_cfg.c Pinmux_Config(_PB_19,
+	 * PINMUX_FUNCTION_LCD_D21)); using it as SD card-detect yanks the LCD data
+	 * line → red-shifted photos.  PA26 is free (SDH_Pin_Grp=4 uses PA6-PA11;
+	 * PA26 is D3 only on SDIO_PAD groups 0/3, unused here). */
+	.sdioh_cd_pin = _PA_26,		// _PNC or other gpio pins, e.g. _PA_26
 	.sdioh_wp_pin = _PNC,		// fixed
 };
 
