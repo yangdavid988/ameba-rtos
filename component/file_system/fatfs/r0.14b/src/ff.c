@@ -5532,6 +5532,161 @@ FRESULT f_findfirst(
 #endif	/* FF_USE_FIND */
 
 
+/*-----------------------------------------------------------------------*/
+/* Open the file a directory cursor is currently on (O(1), no name walk) */
+/*-----------------------------------------------------------------------*/
+
+/* Used by the MJPEG frame sequencer.  The player opens a video folder ONCE
+ * (f_opendir) and streams every frame from the stateful DIR cursor, asking
+ * FatFS "give me the file this entry describes" — never "find me
+ * vol:/video/00001441.jpg" again (that is an O(N) dir scan per frame,
+ * ff.c dir_find).  Open is read-only. */
+
+FRESULT f_open_by_dir(
+	FIL *fp,			/* out: file object for the entry the DIR cursor is on */
+	DIR *dp				/* in: stateful directory cursor; must already sit on a valid FILE entry */
+)
+{
+	FRESULT res;
+	FATFS *fs;
+	BYTE c;
+
+
+	if (!fp || !dp || !dp->obj.fs) {
+		return FR_INVALID_OBJECT;
+	}
+	fs = dp->obj.fs;
+	if (dp->obj.id != fs->id) {
+		return FR_INVALID_OBJECT;	/* Volume remounted while the cursor was open */
+	}
+	if (dp->sect == 0) {
+		return FR_NO_FILE;		/* EOT/disabled cursor — nothing to open */
+	}
+#if FF_FS_REENTRANT
+	if (!lock_fs(fs)) {
+		return FR_TIMEOUT;
+	}
+#endif
+
+	/* Move the fs window to the directory item the cursor is on (dir_sdi /
+	 * dir_next only compute pointers — the window content is lazy-loaded, so
+	 * this guarantees dp->dir points at the real, current entry).  The window
+	 * is on a directory cluster, not a file-data cluster, so reading it
+	 * cannot clobber the streaming file cache. */
+	res = move_window(fs, dp->sect);
+	if (res != FR_OK) {
+#if FF_FS_REENTRANT
+		unlock_fs(fs, res);
+#endif
+		return res;
+	}
+
+	/* Build the FIL from the directory entry the DIR cursor sits on.  NO name
+	 * compare, NO dir_find() re-walk — the whole point over f_open()'s O(N)
+	 * scans.  The cursor is invalid if it points at EOT / a freed slot /
+	 * a directory.  Open is read-only. */
+	if (fs->fs_type != FS_EXFAT) {
+		c = dp->dir[DIR_Name];
+		if (c == 0 || c == DDEM) {	/* EOT or a freed entry — nothing materializes */
+			res = FR_NO_FILE;
+		} else {
+			res = FR_OK;
+		}
+	} else {
+		res = FR_OK;				/* exFAT entry blocks are validated by dir_read() */
+	}
+
+	if (res == FR_OK && !(dp->dir[DIR_Attr] & AM_DIR)) {
+#if FF_FS_EXFAT
+		if (fs->fs_type == FS_EXFAT) {
+			fp->obj.c_scl = dp->obj.sclust;							/* Get containing directory info */
+			fp->obj.c_size = ((DWORD)dp->obj.objsize & 0xFFFFFF00) | dp->obj.stat;
+			fp->obj.c_ofs = dp->blk_ofs;
+			init_alloc_info(fs, &fp->obj);
+		} else
+#endif
+		{
+			fp->obj.sclust = ld_clust(fs, dp->dir);					/* Get object allocation info */
+			fp->obj.objsize = ld_dword(dp->dir + DIR_FileSize);
+		}
+#if FF_USE_FASTSEEK
+		fp->cltbl = 0;				/* Disable fast seek mode */
+#endif
+		fp->obj.fs = fs;			/* Validate the file object */
+		fp->obj.id = fs->id;
+		fp->obj.attr = dp->dir[DIR_Attr] & AM_MASK;
+		fp->flag = FA_READ;			/* Open read-only */
+		fp->err = 0;				/* Clear error flag */
+		fp->sect = 0;				/* Invalidate current data sector */
+		fp->fptr = 0;				/* File pointer at the top of the file */
+		fp->clust = fp->obj.sclust;	/* Current cluster follows the object's first cluster */
+		res = FR_OK;
+	} else if (res == FR_OK) {
+		res = FR_NO_FILE;			/* A directory entry is not openable as a file */
+	}
+
+#if FF_FS_REENTRANT
+		unlock_fs(fs, res);
+#endif
+	return res;
+}
+
+
+/*-----------------------------------------------------------------------*/
+/* Advance a directory cursor to the next openable file (wraps at end)   */
+/*-----------------------------------------------------------------------*/
+
+/* Moves the cursor PAST the entry it currently sits on (dir_next — the
+ * caller has just consumed that entry via f_open_by_dir), then dir_read()
+ * positions it on the next openable FILE (skipping EOT, deleted slots,
+ * sub-directories, volume labels and LFN continuation entries); when the
+ * table is exhausted it wraps around to the first entry.  The player does:
+ * open f_open_by_dir() on the current item -> read -> f_dir_next() → repeat,
+ * so every frame costs one move_window at most, never a name scan. */
+
+FRESULT f_dir_next(
+	DIR *dp				/* in/out: directory cursor to move to the next openable FILE entry */
+)
+{
+	FRESULT res;
+	FATFS *fs;
+
+
+	if (!dp || !dp->obj.fs) {
+		return FR_INVALID_OBJECT;
+	}
+	fs = dp->obj.fs;
+	if (dp->obj.id != fs->id) {
+		return FR_INVALID_OBJECT;	/* Volume remounted while the cursor was open */
+	}
+#if FF_FS_REENTRANT
+	if (!lock_fs(fs)) {
+		return FR_TIMEOUT;
+	}
+#endif
+
+	/* dir_read() LOCATES the entry the cursor already points at — it does NOT
+	 * advance.  dir_next() first steps one slot past the just-consumed entry
+	 * (the caller opened it with f_open_by_dir), then dir_read() finds the
+	 * next valid FILE.  Without the dir_next() the cursor would never move
+	 * and every call would re-open the SAME first frame. */
+	res = dir_next(dp, 0);		/* Step PAST the entry we just consumed */
+	if (res == FR_OK) {
+		res = dir_read(dp, 0);	/* Locate the next openable file entry (skips junk) */
+	}
+	if (res == FR_NO_FILE) {	/* Table exhausted — wrap around to the first entry */
+		res = dir_sdi(dp, 0);	/* Rewind */
+		if (res == FR_OK) {
+			res = dir_read(dp, 0);
+		}
+	}
+#if FF_FS_REENTRANT
+		unlock_fs(fs, res);
+#endif
+	return res;
+}
+
+
 
 #if FF_FS_MINIMIZE == 0
 /*-----------------------------------------------------------------------*/

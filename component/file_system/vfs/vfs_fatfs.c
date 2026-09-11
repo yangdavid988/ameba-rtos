@@ -373,6 +373,57 @@ int fatfs_closedir(void *fs, vfs_file *finfo)
 	}
 }
 
+/* Open the file a FatFS directory cursor (finfo->file -> DIR) currently sits
+ * on, via the SDK's O(1) open-by-cursor (f_open_by_dir).  dst is a fresh
+ * vfs_file that becomes a normal readable FILE* (its ->file is a FIL).  The
+ * cursor is NOT advanced here — call fatfs_dir_next() (or vfs dir_next) to
+ * move it. */
+int fatfs_open_by_dir(void *fs, vfs_file *finfo, vfs_file *fdst)
+{
+	(void) fs;
+	DIR *pdir = finfo ? (DIR *)finfo->file : NULL;
+	FIL *fil;
+	FRESULT res;
+
+	if (pdir == NULL || fdst == NULL) {
+		return -1;
+	}
+	fil = rtos_mem_malloc(sizeof(FIL));
+	if (fil == NULL) {
+		return -1;
+	}
+	memset(fil, 0, sizeof(FIL));
+	res = f_open_by_dir(fil, pdir);
+	if (res > 0) {
+		rtos_mem_free(fil);
+		VFS_DBG(VFS_ERROR, "vfs-fatfs open_by_dir error %d \r\n", res);
+		return (int)res;
+	}
+	fdst->vfs_id = finfo->vfs_id;	/* Carry the same volume/fs identity */
+	fdst->user_id = finfo->user_id;
+	fdst->file = (void *)fil;
+	return 0;
+}
+
+/* Advance a FatFS directory cursor to the next openable FILE entry (wraps at
+ * end of table) — the O(1) companion of fatfs_open_by_dir. */
+int fatfs_dir_next(void *fs, vfs_file *finfo)
+{
+	(void) fs;
+	DIR *pdir = finfo ? (DIR *)finfo->file : NULL;
+	FRESULT res;
+
+	if (pdir == NULL) {
+		return -1;
+	}
+	res = f_dir_next(pdir);
+	if (res > 0) {
+		VFS_DBG(VFS_ERROR, "vfs-fatfs dir_next error %d \r\n", res);
+		return (int)res;
+	}
+	return 0;
+}
+
 int fatfs_mkdir(void *fs, const char *pathname)
 {
 	(void) fs;
@@ -574,6 +625,8 @@ const vfs_opt fatfs_drv = {
 	.opendir = fatfs_opendir,
 	.readdir = fatfs_readdir,
 	.closedir = fatfs_closedir,
+	.open_by_dir = fatfs_open_by_dir,
+	.dir_next = fatfs_dir_next,
 	.stat = fatfs_stat,
 	.access = fatfs_access,
 	.mount = fatfs_mount,

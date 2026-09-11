@@ -203,10 +203,18 @@ SECTIONS
 		__bdram_heap_buffer_start__ = .;
 	} > KM4TZ_BD_RAM
 
-	/* put in the end of psram part */
+	/* put in the end of psram part
+	 * LOCAL MODIFICATION (photo_album_demo, 2026-09-01): add the explicit
+	 * *(.psram_heap.start) collector.  Without it, arrays placed via
+	 * __attribute__((section(".psram_heap.start"))) were ORPHANS — ld
+	 * heuristically dumped our 3 MB LCDC FB pool into KM4TZ_BD_RAM (SRAM)
+	 * once a second such array changed the ordering.  With it, all such
+	 * arrays are guaranteed to land in KM4TZ_BD_PSRAM. */
 	.psram_heap.start (NOLOAD):
 	{
+		. = ALIGN(64);
 		__psram_heap_buffer_start__ = .;
+		*(.psram_heap.start)
 	} > KM4TZ_BD_PSRAM
 
 	.bluetooth_trace.text :
