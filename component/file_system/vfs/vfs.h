@@ -136,6 +136,8 @@ typedef struct {
 	int (*opendir)(void *fs, const char *name, vfs_file *file);
 	struct dirent *(*readdir)(void *fs, vfs_file *file);
 	int (*closedir)(void *fs, vfs_file *file);
+	int (*open_by_dir)(void *fs, vfs_file *file, vfs_file *fdst);	/* Open the entry a FATFS dir cursor sits on (O(1), no name look up) */
+	int (*dir_next)(void *fs, vfs_file *file);						/* Advance a FATFS dir cursor to the next openable file (wraps at EOT) */
 	int (*rmdir)(void *fs, const char *path);
 	int (*mkdir)(void *fs, const char *pathname);
 	int (*access)(void *fs, const char *pathname, int mode);
